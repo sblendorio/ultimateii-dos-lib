@@ -30,7 +30,7 @@ Demo program does not alter any data
 #include <conio.h>
 #include <peekpoke.h>
 #include <unistd.h>
-#include "ultimate_ii.h"
+#include "..\lib\ultimate_lib.h"
 
 #define RVS_ON			0x12
 #define RVS_OFF			0x92
@@ -568,8 +568,7 @@ void main(void)
 	{
 		while(1)
 		{
-			uii_tcpsocketread(socketnr, 400);
-			datacount = uii_data[0] | (uii_data[1]<<8);
+			datacount = uii_tcpsocketread(socketnr, 400);
 
 			for(x=2;x<datacount+2;x++)
 			{

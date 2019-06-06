@@ -16,7 +16,7 @@ Demo program does not alter any data
 #include <stdlib.h>
 #include <stdio.h>
 #include <c64.h>
-#include "ultimate_ii.h"
+#include "..\lib\ultimate_lib.h"
 
 void main(void) 
 {
@@ -76,16 +76,14 @@ void main(void)
 	printf("\n    Status: %s", uii_status);
 	
 	printf("\n\nConnecting to: %s", host);
-	uii_tcpconnect(host, 23);
-	socketnr = uii_data[0];
+	socketnr = uii_tcpconnect(host, 23);
 	printf("\n    Status: %s  (Socket #%d)", uii_status, socketnr);
 	
 	printf("\n\nReading data...\n");
 	
-	while(uii_status[0] == '0' && uii_status[1] == '0')
+	while(uii_tcpconnect_success())
 	{
-		uii_tcpsocketread(socketnr, 1);
-		datacount = uii_data[0] | (uii_data[1]<<8);
+		datacount = uii_tcpsocketread(socketnr, 1);
 		printf("%c", uii_data[2]);	// data byte
 	}
 	printf("\n    Status: %s", uii_status);
