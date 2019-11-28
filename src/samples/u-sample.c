@@ -2,7 +2,7 @@
 Ultimate II+ DOS Command Library
 Scott Hutter
 
-Based on ultimate_dos-1.1.docx and command interface.docx
+Based on ultimate_dos-1.2.docx and command interface.docx
 https://github.com/markusC64/1541ultimate2/tree/master/doc
 
 Disclaimer:  Because of the nature of DOS commands, use this code
@@ -16,7 +16,7 @@ Demo program does not alter any data
 #include <stdlib.h>
 #include <stdio.h>
 #include <c64.h>
-#include "..\lib\ultimate_lib.h"
+#include "../lib/ultimate_lib.h"
 
 void main(void) 
 {
@@ -81,7 +81,7 @@ void main(void)
 	
 	printf("\n\nReading data...\n");
 	
-	while(uii_tcpconnect_success())
+	while(uii_success())
 	{
 		datacount = uii_tcpsocketread(socketnr, 1);
 		printf("%c", uii_data[2]);	// data byte

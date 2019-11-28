@@ -2,12 +2,11 @@
 Ultimate II+ UltimateTerm 64 and 128
 Scott Hutter, Francesco Sblendorio
 
-Based on ultimate_dos-1.1.docx and command interface.docx
+Based on ultimate_dos-1.2.docx and command interface.docx
 https://github.com/markusC64/1541ultimate2/tree/master/doc
 
 Disclaimer:  Because of the nature of DOS commands, use this code
 soley at your own risk.
-
 Patches and pull requests are welcome
 
 Demo program does not alter any data
@@ -26,7 +25,7 @@ Demo program does not alter any data
 #define SCREEN_WIDTH	80
 #define KEYBOARD_BUFFER 208
 #define QUOTE_MODE      244
-#define DISPLAY_HEADER	printf("%c%cUltimateTerm 128 v%s %c", 14, CG_COLOR_WHITE, version, CG_COLOR_CYAN);
+#define DISPLAY_HEADER	printf("%c%c%cUltimateTerm 128 v%s %c", 146, 14, CG_COLOR_WHITE, version, CG_COLOR_CYAN);
 void blank_vicII(void);
 #endif
 
@@ -36,13 +35,13 @@ void blank_vicII(void);
 #define SCREEN_WIDTH	40
 #define KEYBOARD_BUFFER 198
 #define QUOTE_MODE      212
-#define DISPLAY_HEADER	printf("%c%cUltimateTerm v%s %c", 14, CG_COLOR_WHITE, version, CG_COLOR_CYAN);
+#define DISPLAY_HEADER	printf("%c%c%cUltimateTerm v%s %c", 146, 14, CG_COLOR_WHITE, version, CG_COLOR_CYAN);
 #endif
 
 #include <conio.h>
 #include <peekpoke.h>
 #include <unistd.h>
-#include "..\lib\ultimate_lib.h"
+#include "../lib/ultimate_lib.h"
 #include "screen_utility.h"
 
 #define RVS_ON			0x12
@@ -70,16 +69,17 @@ void blank_vicII(void);
 #define CG_COLOR_L_GRAY  	0x9B
 #define SPACE38				"                                      "
 
-#define PB_SIZE 1640
+#define PB_SIZE 1680
 
 #define SOH  ((char)1)     /* Start Of Header */
 #define EOT  ((char)4)     /* End Of Transmission */
 #define ACK  ((char)6)     /* ACKnowlege */
+#define CAN  ((char)0x18)    /* CANcel */
 #define NAK  ((char)0x15)  /* Negative AcKnowlege */
 
 void uii_data_print(void);
 unsigned char term_bell(void);
-unsigned char term_getstring(char* def, char *buf);
+unsigned char term_getchars(char* def, char *buf, unsigned char lbound, unsigned char ubound);
 void term_displayheader(void);
 void putstring_ascii(char* str);
 void term_hostselect(void);
@@ -97,16 +97,21 @@ void save_phonebook(void);
 void help_screen(void);
 void quit(void);
 void download_xmodem(void);
+void dos_commands(void);
+void showdir(char *);
+void send_dos(char *);
 
-char *version = "2.0";
+char *version = "2.3";
 char host[80];
 char portbuff[10];
+char strbuff[520];
+char chr;
 unsigned int port = 0;
 unsigned char socketnr = 0;
 unsigned char asciimode;
 unsigned char pb_loaded = 0;
 unsigned char phonebookctr = 0;
-unsigned char phonebook[20][80];
+unsigned char phonebook[21][80];
 unsigned char dev = 0;
 unsigned char pbtopidx = 0;
 unsigned char pbselectedidx = 0;
@@ -114,6 +119,13 @@ unsigned char pb_bytes[PB_SIZE+1];
 unsigned char hst[80];
 unsigned file_index;
 unsigned char y = 0;
+unsigned char px = 0;
+unsigned char py = 0;
+int intbuff = 0;
+int datacount;
+
+int len_diskbuff, idiskbuff;
+int nextchar(void);
 
 unsigned char ascToPet[] = {
 0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x14,0x20,0x0a,0x11,0x93,0x0d,0x0e,0x0f,
@@ -144,11 +156,14 @@ unsigned char term_bell(void) {
 	return 7;
 }
 
-unsigned char term_getstring(char* def, char *buf) {
+#define term_gethostname(def, buf) (term_getchars(def, buf, 33, 90))
+#define term_getstring(def, buf) (term_getchars(def, buf, 32, 255))
+
+unsigned char term_getchars(char* def, char *buf, unsigned char lbound, unsigned char ubound) {
 	unsigned char c,x;
 	
 	cursor_on();
-	for(x=0;x<strlen(def);x++) {
+	for (x=0;x<strlen(def);x++) {
 		buf[x] = def[x];
 		putchar(def[x]);
 	}
@@ -156,7 +171,7 @@ unsigned char term_getstring(char* def, char *buf) {
 	POKE(KEYBOARD_BUFFER,0);
 	while(1) {
 		c = kbhit();
-		if(c != 0) {
+		if (c != 0) {
 			c = cgetc();
 			switch(c) {
 				case CR:
@@ -165,7 +180,7 @@ unsigned char term_getstring(char* def, char *buf) {
 					return x;
 
 				case DELETE:
-					if(x > 0) {
+					if (x > 0) {
 						x--;
 						cursor_off();
 						putchar(LEFT);
@@ -176,7 +191,10 @@ unsigned char term_getstring(char* def, char *buf) {
 					break;
 
 				default:
-					if(c > 32 && c < 91) {
+					if (
+						((c >= 32 && c <= 127) || (c >= 160)) &&
+						(c >= lbound && c <= ubound)
+					) {
 						buf[x++] = c;
 						cursor_off();
 						putchar(c);
@@ -196,7 +214,7 @@ void term_displayheader(void) {
 }
 
 void putstring_ascii(char *str) {
-	for (; *str; str++)
+	for (; datacount > 0; ++str, --datacount)
 		if (*str != LF) *str==BELL ? term_bell() : putchar(ascToPet[*str]);
 }
 
@@ -205,7 +223,7 @@ void term_window(unsigned char x, unsigned char y, unsigned char width, unsigned
 	char *spaces="                                        ";
 
 	spaces[width-2] = 0;
-	for(i=y+1;i<y+height;i++)
+	for (i=y+1;i<y+height;i++)
 		cputsxy(x+1,i,spaces);
 	if (!border) return;
 
@@ -219,7 +237,7 @@ void delete_phonebook_entry(void) {
 	unsigned char ch, ctr, x;
 	if (!pbselectedidx || phonebookctr<=0) return;
 
-	for(ctr=pbselectedidx; ctr<phonebookctr; ++ctr)
+	for (ctr=pbselectedidx; ctr<phonebookctr; ++ctr)
 		strcpy(phonebook[ctr], phonebook[ctr+1]);
 	--phonebookctr;
 	if (pbtopidx>0 && pbselectedidx>phonebookctr && pbtopidx==pbselectedidx) {
@@ -230,7 +248,7 @@ void delete_phonebook_entry(void) {
 		--pbselectedidx;
 	}
 	x = 15;
-	for(ctr=pbtopidx; ctr<=pbtopidx+8 && ctr<=phonebookctr+1; ++ctr) {
+	for (ctr=pbtopidx; ctr<=pbtopidx+8 && ctr<=phonebookctr+1; ++ctr) {
 		gotoxy(1,x++); 
 		ch = (ctr == pbselectedidx) ? '>' : ' ';
 		printf(ctr<=phonebookctr ? "%c %-36s" : SPACE38,ch,phonebook[ctr]);
@@ -244,7 +262,7 @@ void add_phonebook_entry(void) {
 
 	putchar(CG_COLOR_CYAN);
 	cputsxy(8,14,"[Add entry to phonebook]");
-	if(read_host_and_port("", "")) {
+	if (read_host_and_port("", "")) {
 		sprintf(hst,"%s %u",host,port);
 		++phonebookctr;
 		for (ctr=phonebookctr-1; ctr>=pbselectedidx+1; --ctr)
@@ -264,17 +282,17 @@ void edit_phonebook_entry() {
 	cputsxy(7,14,"[Edit entry of phonebook]");
 	ctr = 0;
 	len = strlen(phonebook[pbselectedidx]);
-	for(x=0; x<len && phonebook[pbselectedidx][x]!=' '; x++)
+	for (x=0; x<len && phonebook[pbselectedidx][x]!=' '; x++)
 		host[ctr++] = phonebook[pbselectedidx][x];
 	host[ctr] = 0;
 	
 	++x;
 	ctr = 0;
-	for(; x<len; x++)
+	for (; x<len; x++)
 		portbuff[ctr++] = phonebook[pbselectedidx][x];
 	portbuff[ctr] = 0;
 
-	if(read_host_and_port(host, portbuff)) {
+	if (read_host_and_port(host, portbuff)) {
 		sprintf(hst,"%s %u",host,port);
 		strcpy(phonebook[pbselectedidx],hst);
 	}
@@ -293,7 +311,7 @@ void save_phonebook(void) {
 	cputsxy(9,18,"SAVING: PLEASE WAIT...");
 
 	pb_bytes[0] = 0;
-	for(ctr=1; ctr<=phonebookctr; ++ctr) {
+	for (ctr=1; ctr<=phonebookctr; ++ctr) {
 		strcat(pb_bytes, phonebook[ctr]);
 		strcat(pb_bytes, "\n");
 	}
@@ -302,7 +320,7 @@ void save_phonebook(void) {
 	status1 = cbm_open(2, dev, CBM_WRITE,"u-term,s");
 	status2 = cbm_write(2, pb_bytes, strlen(pb_bytes));
 	cbm_close(2);
-	if(!status1 && status2==-1) {
+	if (!status1 && status2==-1) {
 		cbm_open(15, dev, 15, "");
 		cbm_read(15, pb_bytes, PB_SIZE);
 		cbm_close(15);
@@ -317,7 +335,7 @@ void quit(void) {
 	term_window(0, 14, 40, 10, 0);
 	gotoxy(9,18); printf("ARE YOU SURE (Y/N)? ");
 	cursor_on();
-	term_getstring("", hst);
+	term_gethostname("", hst);
 	cursor_off();
 	if (hst[0]=='y' || hst[0]=='Y')
 		RESET_MACHINE;
@@ -338,12 +356,12 @@ void load_phonebook(void) {
 	cbm_close(2);
 	cbm_close(15);
 
-	if(dev>=8) {
+	if (dev>=8) {
 		c = cbm_open(2, dev, CBM_READ, file);
 		bytesRead = c ? 0 : cbm_read(2, pb_bytes, PB_SIZE);
 	}
 	strcpy(phonebook[0], "MANUAL ENTRY");
-	if(dev < 8 || bytesRead <= 0) { // No drive or no file
+	if (dev < 8 || bytesRead <= 0) { // No drive or no file
 		// Default phonebook
 		strcpy(phonebook[1], "afterlife.dynu.com 6400");
 		strcpy(phonebook[2], "bbs.jammingsignal.com 23");
@@ -354,8 +372,8 @@ void load_phonebook(void) {
 		strcpy(phonebook[7], "particlesbbs.dyndns.org 6400");
 		strcpy(phonebook[8], "bbs.retroacademy.it 6510");
 		phonebookctr = 8;
-		if(dev >= 8) {
-			if(!c && !cbm_open(15, dev, 15, "")) cbm_read(15, pb_bytes, PB_SIZE);
+		if (dev >= 8) {
+			if (!c && !cbm_open(15, dev, 15, "")) cbm_read(15, pb_bytes, PB_SIZE);
 			cbm_close(15);
 		}
 	} else {
@@ -377,7 +395,7 @@ void load_phonebook(void) {
 				hst[++ctr] = 0;
 
 				// hostname too big
-				if(ctr == 78) break;
+				if (ctr == 78) break;
 			}
 		}
 		cbm_close(2);
@@ -410,70 +428,97 @@ startover:
 	POKE(KEYBOARD_BUFFER,0);
 	while(1) {
 		c = kbhit();
-		if(c != 0) {
+		if (c != 0) {
 			c = cgetc();
 			if ((c>=97 && c<=122) || (c>=193 && c<=218)) c &= 95; // c to lowercase
 
-			if(c == 'd') 
+			if (c == 'd') 
 				delete_phonebook_entry();
 
-			else if(c == 'a')
+			else if (c == 'a')
 				add_phonebook_entry();
 
-			else if(c == 'e')
+			else if (c == 'e')
 				edit_phonebook_entry();
 
-			else if(c == 'l') 
+			else if (c == 'l') 
 				load_phonebook();
 
-			else if(c == 's')
+			else if (c == 's')
 				save_phonebook();
 
-			else if(c == 'q')
+			else if (c == 'q')
 				quit();
 
-			else if(c == DOWN && wherey() < 23 && (pbselectedidx + 1 <= phonebookctr)) {
+			else if (c == 133) { // KEY F1: help
+				help_screen();
+				cursor_off();
+			}
+
+			else if (c == 135) { // KEY F5: send DOS command
+				px = wherex(); py = wherey();
+				dos_commands();
+				cursor_off();
+				gotoxy(37, 9); printf("%c%2d%c", CG_COLOR_YELLOW, dev, CG_COLOR_CYAN);
+				gotoxy(px, py);
+			}
+
+			else if (c == '+') {
+				px = wherex(); py = wherey();
+				if (dev < 15) ++dev;
+				gotoxy(37, 9); printf("%c%2d%c", CG_COLOR_YELLOW, dev, CG_COLOR_CYAN);
+				gotoxy(px, py);
+			}
+
+			else if (c == '-') {
+				px = wherex(); py = wherey();
+				if (dev > 8) --dev;
+				gotoxy(37, 9); printf("%c%2d%c", CG_COLOR_YELLOW, dev, CG_COLOR_CYAN);
+				gotoxy(px, py);
+			}
+
+			else if (c == DOWN && wherey() < 23 && (pbselectedidx + 1 <= phonebookctr)) {
 				cputcxy(1,y++,' ');
 				cputcxy(1,y,'>');
 				pbselectedidx++;
 			}
 
-			else if(c == DOWN && wherey() == 23 && (pbselectedidx + 1 <= phonebookctr)) {
-				if(phonebookctr >= pbtopidx+8) {
+			else if (c == DOWN && wherey() == 23 && (pbselectedidx + 1 <= phonebookctr)) {
+				if (phonebookctr >= pbtopidx+8) {
 					pbtopidx++;
 					update_phonebook(23);
 					pbselectedidx++;
 				}
 			}
 
-			else if(c == UP && wherey() > 15) {
+			else if (c == UP && wherey() > 15) {
 				cputcxy(1,y--,' ');
 				cputcxy(1,y,'>');
 				pbselectedidx--;
 			}
 
-			else if(c == UP && wherey() == 15) {
-				if(pbtopidx > 0) {
+			else if (c == UP && wherey() == 15) {
+				if (pbtopidx > 0) {
 					pbtopidx--;
 					update_phonebook(15);
 					pbselectedidx--;
 				}
 			}
 
-			else if(c == CR) {
-				if(pbselectedidx == 0) {
+			else if (c == CR) {
+				if (pbselectedidx == 0) {
 					// MANUAL ENTRY
-					if(read_host_and_port("", "")) return;
+					if (read_host_and_port("", "")) return;
 					goto startover;
 				} else {
 					ctr = 0;
 					len = strlen(phonebook[pbselectedidx]);
-					for(x=0; x<len && phonebook[pbselectedidx][x]!=' '; x++)
+					for (x=0; x<len && phonebook[pbselectedidx][x]!=' '; x++)
 						host[ctr++] = phonebook[pbselectedidx][x];
 					host[ctr] = 0;
 					
 					ctr = 0;
-					for(; x<len; x++)
+					for (; x<len; x++)
 						portbuff[ctr++] = phonebook[pbselectedidx][x];
 					portbuff[ctr] = 0;
 
@@ -486,11 +531,11 @@ startover:
 }
 
 void term_getconfig(void) {
-	printf("Bug reports to: scott.hutter@gmail.com");
+	printf("%cby %cScott Hutter%c & %cFrancesco Sblendorio%c", CG_COLOR_CYAN, CG_COLOR_WHITE, CG_COLOR_CYAN, CG_COLOR_WHITE, CG_COLOR_CYAN);
 	printf("\n\n%cPlease ensure the following:%c",CG_COLOR_YELLOW,CG_COLOR_CYAN);
 	printf("\n - Network link is in 'Link Up' state");
-	printf("\n - Disable any emulated cartridges");
 	printf("\n - %cPress F1%c to get help in session", CG_COLOR_WHITE, CG_COLOR_CYAN);
+	printf("\n - %cPress F5%c to send DOS commands", CG_COLOR_WHITE, CG_COLOR_CYAN);
 
 	uii_identify();
 	printf("\n\nNIC Status: %c%s%c", CG_COLOR_WHITE, uii_status, CG_COLOR_CYAN);
@@ -500,21 +545,22 @@ void term_getconfig(void) {
 	printf("\n   Netmask: %c%d.%d.%d.%d%c", CG_COLOR_WHITE,uii_data[4], uii_data[5], uii_data[6], uii_data[7],CG_COLOR_CYAN);
 	printf("\n   Gateway: %c%d.%d.%d.%d%c", CG_COLOR_WHITE,uii_data[8], uii_data[9], uii_data[10], uii_data[11],CG_COLOR_CYAN);
 
-	gotoxy(30,10); printf("\005A%cdd  \005S%cave", CG_COLOR_CYAN, CG_COLOR_CYAN);
-	gotoxy(30,11); printf("\005D%cel  \005L%coad", CG_COLOR_CYAN, CG_COLOR_CYAN);
-	gotoxy(30,12); printf("\005E%cdit \005Q%cuit", CG_COLOR_CYAN, CG_COLOR_CYAN);
+	gotoxy(29, 9); printf("\005+-%c Drive%c%2d", CG_COLOR_CYAN, CG_COLOR_YELLOW, dev);
+	gotoxy(29,10); printf("\005A%cdd   \005S%cave", CG_COLOR_CYAN, CG_COLOR_CYAN);
+	gotoxy(29,11); printf("\005D%cel   \005L%coad", CG_COLOR_CYAN, CG_COLOR_CYAN);
+	gotoxy(29,12); printf("\005E%cdit  \005Q%cuit", CG_COLOR_CYAN, CG_COLOR_CYAN);
 	gotoxy(0,2);
 }
 
 void main(void) 
 {
-	int datacount;
 	unsigned char c = 0;
-	char buff[2] = {0,0};
+	char buff[2];
 	int x = 0;
 
 	detect_uci();
 	dev = getcurrentdevice();
+	dev = (dev < 8 ? 8 : dev);
 
 #ifdef __C128__
 	videomode(VIDEOMODE_80COL);
@@ -548,7 +594,7 @@ void main(void)
 		
 		socketnr = uii_tcpconnect(host, port);
 		
-		if (uii_tcpconnect_success()) {
+		if (uii_success()) {
 			putchar(CG_COLOR_CYAN);
 			cursor_on();
 			while(1) {
@@ -563,27 +609,35 @@ void main(void)
 				} // datacount == -1 means "wait state"
 
 				c = kbhit();
-				if(c != 0) {
+				if (c != 0) {
 					c = cgetc();
 					buff[0] = c;
+					buff[1] = 0;
 					if (c == 133) // KEY F1: HELP
 						help_screen();
-					else if (c == 134) // KEY F3: switch petscii/ascii
-						asciimode = !asciimode;
-					else if (c == 135) // KEY F5: download (xmodem protocol)
+					else if (c == 134) // KEY F3: download (xmodem protocol)
 						download_xmodem();
+					else if (c == 135) // KEY F5: send DOS commands to disk
+						dos_commands();
+					else if (c == 139)  // KEY F6: switch petscii/ascii
+						asciimode = !asciimode;
 					else if (c == 136) // KEY F7: close connection
 						break;
 					else
 						uii_tcpsocketwrite(socketnr, buff);
 				}
 			}
-			printf("%c\nClosing connection", 14);
 			uii_tcpclose(socketnr);
 			cursor_off();
+			if (c != 136) { // NOT KEY F7
+				printf("\n%cconnection closed, hit any key", CG_COLOR_WHITE);
+				c = 0; while(c==0) c=kbhit();
+			}
+			putchar(14);
 		}
 		else
 		{
+			cursor_off();
 			printf("\n%c * Connect failed:\n   %s", CG_COLOR_L_RED, uii_status);
 			printf("\n\n * Press any key");
 			
@@ -596,7 +650,7 @@ void main(void)
 void update_phonebook(unsigned char new_y) {
 	unsigned char ctr;
 	y = 15;
-	for(ctr=pbtopidx; ctr<=pbtopidx+8 && ctr<=phonebookctr; ++ctr) {
+	for (ctr=pbtopidx; ctr<=pbtopidx+8 && ctr<=phonebookctr; ++ctr) {
 		gotoxy(3,y++);
 		cprintf("%-36s",phonebook[ctr]);
 	}
@@ -608,7 +662,7 @@ void display_phonebook(void) {
 	unsigned char ctr, x = 15;
 	putchar(CG_COLOR_CYAN);
 	term_window(0, 14, 40, 10, 0);
-	for(ctr=pbtopidx; ctr<=pbtopidx+8 && ctr<=phonebookctr; ++ctr)
+	for (ctr=pbtopidx; ctr<=pbtopidx+8 && ctr<=phonebookctr; ++ctr)
 		cputsxy(3,x++,phonebook[ctr]);
 	cputcxy(1,y,'>');
 }
@@ -618,12 +672,12 @@ unsigned char read_host_and_port(char *prompt_host, char *prompt_port) {
 	term_window(0, 14, 40, 10, 0);
 	gotoxy(5,16);
 	printf("%cHost: %c", CG_COLOR_CYAN, CG_COLOR_WHITE);
-	term_getstring(prompt_host, host);
+	term_gethostname(prompt_host, host);
 	putchar(CG_COLOR_CYAN);
 	if (host[0]==0) return 0;
 	gotoxy(5,18);
 	printf("%cPort: %c", CG_COLOR_CYAN, CG_COLOR_WHITE); 
-	term_getstring(prompt_port, portbuff);
+	term_gethostname(prompt_port, portbuff);
 	putchar(CG_COLOR_CYAN);
 	if (portbuff[0] == 0) return 0;
 	port = atoi(portbuff);
@@ -661,10 +715,12 @@ void uii_data_print(void) {
 	asm("lda %v+1", string_ptr);
 	asm("adc #$00");
 	asm("sta $fc");
+	asm("lda #$00");
+	asm("sta $fd"); // keeps track of hibyte of number of chars printed
+
 	asm("ldy #$00");
 loop:
 	asm("lda ($fb),y");
-	asm("beq %g", done);
 #ifdef __C128__
 	asm("cmp #$0a");
 	asm("beq %g", skipline);
@@ -681,11 +737,15 @@ skipline:
 #endif
 nextch:
 	asm("iny");
-	asm("bne %g", loop);
+	asm("bne %g", skp);
 	asm("inc $fc");
-	asm("jmp %g", loop);
-done:
-	asm("rts");
+	asm("inc $fd");
+skp:
+	asm("cpy %v", datacount);
+	asm("bne %g", loop);
+	asm("lda $fd");
+	asm("cmp %v+1", datacount);
+	asm("bne %g", loop);
 }
 #pragma optimize (pop)
 
@@ -724,10 +784,12 @@ void help_screen(void) {
 	#define LINE1 34 
 	#define LINE2 28
 	#define LINE3 27
+	#define LINE4 58
 	#else
 	#define LINE1 15
 	#define LINE2 8
 	#define LINE3 7
+	#define LINE4 16
 	#endif
 	cursor_off();
 	save_screen();
@@ -738,12 +800,16 @@ void help_screen(void) {
 	putchar(14);
 	gotoxy(LINE1,1);  printf("\222HELP SCREEN");
 	gotoxy(LINE1,2);  printf("\243\243\243\243\243\243\243\243\243\243\243");
-	gotoxy(LINE2,20); printf("Press any key to go back");
+	gotoxy(LINE2,16); printf("Press any key to go back");
 	gotoxy(LINE3,5);  printf("\022 F1 \222  This HELP screen");
-	gotoxy(LINE3,7);  printf("\022 F3 \222  Switch PETSCII/ASCII");
-	gotoxy(LINE3,9);  printf("\022 F5 \222  Download with Xmodem");
-	gotoxy(LINE3,11); printf("\022 F7 \222  Exit BBS");
-
+	gotoxy(LINE3,7);  printf("\022 F3 \222  Download with Xmodem");
+	gotoxy(LINE3,9);  printf("\022 F5 \222  DOS commands to disk");
+	gotoxy(LINE3,11); printf("\022 F6 \222  Switch PETSCII/ASCII");
+	gotoxy(LINE3,13); printf("\022 F7 \222  Exit BBS");
+	gotoxy(LINE4,21); printf("%cPlease report issues:", CG_COLOR_L_GRAY);
+	gotoxy(LINE4,22); printf("%chttps://git.io/fjyUe", CG_COLOR_L_GRAY);
+	gotoxy(LINE4,23); printf("%c\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243", CG_COLOR_WHITE);
+	putchar(CG_COLOR_WHITE);
 	POKE(KEYBOARD_BUFFER,0);
 	cgetc();
 	POKE(KEYBOARD_BUFFER,0);
@@ -751,13 +817,156 @@ void help_screen(void) {
 	cursor_on();
 }
 
+void dos_commands(void) {
+	cursor_off();
+	save_screen();
+	POKE(QUOTE_MODE, 0);
+	putchar(CG_COLOR_WHITE);
+	clrscr();
+	putchar(14);
+
+	printf("Enter a DOS command, or:\n"
+	       "\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\243\n"
+	       "%c$ %c to get directory\n"
+	       "%c#8%c to set drive number to 8\n"
+	       "%c#9%c to set drive number to 9\n"
+	       "%c@ %c to read status\n"
+	       "%c. %c to go back\n\n"
+	       , CG_COLOR_WHITE, CG_COLOR_L_GRAY
+	       , CG_COLOR_WHITE, CG_COLOR_L_GRAY
+	       , CG_COLOR_WHITE, CG_COLOR_L_GRAY
+	       , CG_COLOR_WHITE, CG_COLOR_L_GRAY
+	       , CG_COLOR_WHITE, CG_COLOR_L_GRAY
+	       );
+	putchar(CG_COLOR_WHITE);
+
+	for (;;)  {
+		printf("#%d> ", dev);
+		term_getstring("", strbuff);
+		putchar('\n');
+		if (!strbuff[0] || !strcmp(".", strbuff))
+			break;
+
+		if (strbuff[0] == '#') {
+			intbuff = atoi(strbuff+1);
+			if (intbuff >= 8 && intbuff <= 15) dev = intbuff;
+		} else if (strbuff[0] == '$') {
+			showdir(strbuff);
+		} else if (strbuff[0] == '@') {
+			send_dos(strbuff+1);
+		} else {
+			send_dos(strbuff);
+		}
+	}
+	
+	POKE(KEYBOARD_BUFFER,0);
+	restore_screen();
+	cursor_on();
+}
+
+void send_dos(char *s) {
+	cbm_close(15);
+	intbuff = cbm_open(15, dev, 15, s);
+	if (intbuff) {
+		cbm_close(15);
+		printf("I/O error\n");
+		return;
+	}
+	pb_bytes[0] = 0;
+	intbuff = cbm_read(15, pb_bytes, PB_SIZE);
+	if (intbuff > 0)
+		pb_bytes[intbuff] = 0;
+	else {
+		cbm_close(15);
+		printf("I/O error\n");
+		return;
+	}
+	cbm_close(15);
+	printf("%s\n", pb_bytes);
+}
+
+void showdir(char *s) {
+	int a,b;
+	cbm_close(2); cbm_close(15);
+	intbuff = cbm_open(2, dev, 0, s);
+	if (intbuff) {
+		cbm_close(2); cbm_close(15);
+		printf("I/O error\n");
+		return;
+	}
+
+	pb_bytes[0] = 0;
+	cbm_open(15, dev, 15, "");
+	intbuff = cbm_read(15, pb_bytes, PB_SIZE);
+	if (intbuff > 0)
+		pb_bytes[intbuff] = 0;
+	else {
+		cbm_close(2); cbm_close(15);
+		printf("I/O error\n");
+		return;
+	}
+	if (atoi(pb_bytes)) {
+		cbm_close(2); cbm_close(15);
+		printf("%s\n", pb_bytes);
+		return;
+	}
+	
+	len_diskbuff = 0; idiskbuff = 0;
+	
+	nextchar();
+	nextchar();
+
+	for (;;) {
+		a = nextchar();
+		b = nextchar();
+		if ((!a && !b) || a<0 || b<0) break;
+		a = nextchar();
+		b = nextchar();
+		if (a<0 || b<0) break;
+		printf("%d ", b*256 + a);
+		do {
+			if (kbhit()) {
+				b = cgetc();
+				if (b == 3 || b == 95) { 
+					cbm_close(2); cbm_close(15); 
+					putchar('\n'); 
+					return;
+				}
+			}
+			a = nextchar();
+			putchar(a > 0 ? a : '\n');
+		} while (a > 0);
+		if (a < 0) break;
+	}
+	putchar('\n');
+	cbm_close(2);
+	cbm_close(15);
+}
+
+int nextchar(void) {
+    char result;
+    if (idiskbuff < len_diskbuff) {
+        result = strbuff[idiskbuff++];
+    } else {
+        do {
+            len_diskbuff = cbm_read(2, strbuff, 512);
+            if (len_diskbuff == 0) return -1;
+        } while (len_diskbuff == 0);
+        result = strbuff[0];
+        idiskbuff = 1;
+    }
+    return result;
+}
+
 void process_xmodem_sector(char sector[], char is_eot) {
 	int len = 128;
 	unsigned char status;
 
-	if (is_eot)
+	if (is_eot) {
+		chr = sector[len-1];
 		while (len > 0 && sector[len-1] == 26)
 			--len;
+	}
 
 	if (len > 0)
 		status = cbm_write(2, sector, len);
@@ -776,6 +985,7 @@ void download_xmodem(void) {
 
 	#define MAXERRORS 10
 	#define SECSIZE   128
+
 	char filename[80];
 	char scratch_cmd[80];
 	char c;
@@ -784,7 +994,7 @@ void download_xmodem(void) {
 	char blocknumber;
 	char checksum;
 	unsigned char i, status;
-	unsigned char errorcount;
+	unsigned char errorcount, errorfound;
 	char sector[SECSIZE];
 	char firstread;
 
@@ -814,24 +1024,41 @@ void download_xmodem(void) {
 	for (i=0; i<strlen(filename); ++i) {
 		c = filename[i];
 		if ((c>=97 && c<=122) || (c>=193 && c<=218)) c &= 95;
+		switch (c) {
+			case ':':
+			case ',':
+			case '?':
+			case '*':
+			case '@':
+			case '$':
+				c = '.';
+		}
 		filename[i] = c;
 	}
-	gotoxy(LINEP3,8); printf("\022P\222RG or \022S\222EQ? ");
+	gotoxy(LINEP3,8); printf("\022P\222RG, \022S\222EQ or \022U\222SR? ");
 	POKE(KEYBOARD_BUFFER, 0);
-	cursor_on();
+	cursor_off();
 	do {
 		c = cgetc();
+		if (c == 3 || c == 95) {
+			restore_screen();
+			cursor_on();
+			return;
+		}
 		if ((c>=97 && c<=122) || (c>=193 && c<=218)) c &= 95;
-	} while (c != 'p' && c !='s');
-	if (c == 'p') strcat(filename, ",p"); else strcat(filename, ",s");
+	} while (c != 'p' && c !='s' && c != 'u');
 	strcpy(scratch_cmd, "s:");
 	strcat(scratch_cmd, filename);
+	if (c == 'p') strcat(filename, ",p");
+		else if (c == 's') strcat(filename, ",s");
+		else strcat(filename, ",u");
 
 	cursor_off();
 	POKE(KEYBOARD_BUFFER, 0);
 	putchar(c);
-	gotoxy(0,10); printf("WAIT PLEASE.");
+	gotoxy(0,10); printf("PLEASE WAIT (RUN/STOP to abort).");
 	cursor_off();
+
 	// Open file in write mode
 	cbm_close(15); cbm_close(2);
 	cbm_open(15, dev, 15, scratch_cmd); cbm_close(15);
@@ -846,10 +1073,12 @@ void download_xmodem(void) {
 
 	// Start Xmodem transfer
 	cursor_off();
+	uii_reset_uiidata();
 	uii_tcpsocketwritechar(socketnr, NAK);
 
 	firstread = 1;
 	do {
+		errorfound = 0;
 		c = uii_tcp_nextchar(socketnr);
 		if (!firstread) {
 			putchar('.');
@@ -858,9 +1087,10 @@ void download_xmodem(void) {
 		if (c != EOT) {
 			if (c != SOH) {
 				printf("\nERROR: expected SOH, received: %d\n", c);
-				if (++errorcount < MAXERRORS)
+				if (++errorcount < MAXERRORS) {
+					errorfound = 1;
 					continue;
-				else {
+				} else {
 					printf("\nFATAL: too may errors\n");
 					break;
 				}
@@ -869,11 +1099,13 @@ void download_xmodem(void) {
 			not_b = ~uii_tcp_nextchar(socketnr);
 			if (b != not_b) {
 				printf("\nERROR during checking blocknumber parity");
+				errorfound = 1;
 				++errorcount;
 				continue;
 			}
 			if (b != blocknumber) {
 				printf("\nERROR: Wrong blocknumber");
+				errorfound = 1;
 				++errorcount;
 				continue;
 			}
@@ -884,14 +1116,36 @@ void download_xmodem(void) {
 			}
 			if (checksum != uii_tcp_nextchar(socketnr)) {
 				printf("ERROR: bad checksum");
+				errorfound = 1;
 				++errorcount;
-				continue;
 			}
-			uii_tcpsocketwritechar(socketnr, ACK);
-			++blocknumber;
 
-			if (errorcount != 0)
+			if (kbhit()) {
+				i = cgetc();
+				if (i == 3 || i == 95) {
+					uii_tcpsocketwritechar(socketnr, CAN);
+					printf("\nCanceling download...\n");
+					cbm_close(2);
+					uii_reset_uiidata();
+					cbm_open(15, dev, 15, scratch_cmd);
+					cbm_read(15, pb_bytes, PB_SIZE);
+					cbm_close(15);
+					printf("\nBREAK: press any key");
+					POKE(KEYBOARD_BUFFER,0);
+					cgetc();
+					POKE(KEYBOARD_BUFFER,0);
+					restore_screen();
+					cursor_on();
+					return;
+				}
+			}
+
+			if (errorfound != 0) {
 				uii_tcpsocketwritechar(socketnr, NAK);
+			} else {
+				uii_tcpsocketwritechar(socketnr, ACK);
+				++blocknumber;
+			}
 
 			firstread = 0;
 		}
@@ -904,8 +1158,8 @@ void download_xmodem(void) {
 	cbm_close(15);
 
 	uii_tcpsocketwritechar(socketnr, ACK);
-	uii_tcpsocketwritechar(socketnr, ACK);
-	uii_tcpsocketwritechar(socketnr, ACK);
+
+	uii_reset_uiidata();
 
 	printf("\n\nDownload finished: press any key");
 	POKE(KEYBOARD_BUFFER,0);

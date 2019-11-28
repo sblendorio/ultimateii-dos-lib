@@ -2,7 +2,7 @@
 Ultimate 64/II+ Command Library
 Scott Hutter, Francesco Sblendorio
 
-Based on ultimate_dos-1.1.docx and command interface.docx
+Based on ultimate_dos-1.2.docx and command interface.docx
 https://github.com/markusC64/1541ultimate2/tree/master/doc
 
 Disclaimer:  Because of the nature of DOS commands, use this code
@@ -591,7 +591,7 @@ int uii_readstatus(void)
 void uii_getinterfacecount(void)
 {
 	unsigned char tempTarget = uii_target;
-	unsigned char cmd[] = {0x00,0x02};
+	unsigned char cmd[] = {0x00,NET_CMD_GET_INTERFACE_COUNT};
 	
 	uii_settarget(TARGET_NETWORK);
 	uii_sendcommand(cmd, 0x02);
@@ -606,7 +606,7 @@ void uii_getinterfacecount(void)
 void uii_getipaddress(void)
 {
 	unsigned char tempTarget = uii_target;
-	unsigned char cmd[] = {0x00,0x05, 0x00}; // interface 0 (theres only one)
+	unsigned char cmd[] = {0x00,NET_CMD_GET_IP_ADDRESS, 0x00}; // interface 0 (theres only one)
 	
 	uii_settarget(TARGET_NETWORK);
 	uii_sendcommand(cmd, 0x03);
@@ -621,7 +621,7 @@ void uii_getipaddress(void)
 unsigned char uii_tcpconnect(char* host, unsigned short port)
 {
 	unsigned char tempTarget = uii_target;
-	unsigned char cmd[] = {0x00,0x07, 0x00, 0x00};
+	unsigned char cmd[] = {0x00,NET_CMD_TCP_SOCKET_CONNECT, 0x00, 0x00};
 	int x=0;
 	unsigned char* fullcmd;
 	
@@ -635,9 +635,6 @@ unsigned char uii_tcpconnect(char* host, unsigned short port)
 		fullcmd[x+4] = host[x];
 	
 	fullcmd[4+strlen(host)] = 0x00;
-	
-	//for(x=0;x < 4+strlen(host)+1; x++)
-	//	printf("\nbyte %d: %d", x, fullcmd[x]);
 	
 	uii_settarget(TARGET_NETWORK);
 	uii_sendcommand(fullcmd, 4+strlen(host)+1);
@@ -656,7 +653,7 @@ unsigned char uii_tcpconnect(char* host, unsigned short port)
 void uii_tcpclose(unsigned char socketid)
 {
 	unsigned char tempTarget = uii_target;
-	unsigned char cmd[] = {0x00,0x09, 0x00};
+	unsigned char cmd[] = {0x00,NET_CMD_TCP_SOCKET_CLOSE, 0x00};
 	cmd[2] = socketid;
 	
 	uii_settarget(TARGET_NETWORK);
@@ -672,7 +669,7 @@ void uii_tcpclose(unsigned char socketid)
 int uii_tcpsocketread(unsigned char socketid, unsigned short length)
 {
 	unsigned char tempTarget = uii_target;
-	unsigned char cmd[] = {0x00,0x10, 0x00, 0x00, 0x00};
+	unsigned char cmd[] = {0x00,NET_CMD_TCP_SOCKET_READ, 0x00, 0x00, 0x00};
 
 	cmd[0] = cmd[0];
 	cmd[1] = cmd[1];
@@ -691,11 +688,76 @@ int uii_tcpsocketread(unsigned char socketid, unsigned short length)
 	return uii_data[0] | (uii_data[1]<<8);
 }
 
+int uii_tcplistenstart(unsigned short port)
+{
+	unsigned char tempTarget = uii_target;
+	unsigned char cmd[] = {0x00,NET_CMD_TCP_LISTENER_START, 0x00, 0x00};
+	cmd[2] = port & 0xff;
+	cmd[3] = (port>>8) & 0xff;
+	
+	uii_settarget(TARGET_NETWORK);
+	uii_sendcommand(cmd, 0x04);
+
+	uii_readdata();
+	uii_readstatus();
+	uii_accept();
+	
+	uii_target = tempTarget;
+	return uii_data[0] | (uii_data[1]<<8);
+}
+
+int uii_tcplistenstop()
+{
+	unsigned char tempTarget = uii_target;
+	unsigned char cmd[] = {0x00,NET_CMD_TCP_LISTENER_STOP};
+	
+	uii_settarget(TARGET_NETWORK);
+	uii_sendcommand(cmd, 0x02);
+
+	uii_readdata();
+	uii_readstatus();
+	uii_accept();
+	
+	uii_target = tempTarget;
+	return uii_data[0] | (uii_data[1]<<8);
+}
+
+int uii_tcpgetlistenstate()
+{
+	unsigned char tempTarget = uii_target;
+	unsigned char cmd[] = {0x00,NET_CMD_GET_LISTENER_STATE};
+	
+	uii_settarget(TARGET_NETWORK);
+	uii_sendcommand(cmd, 0x02);
+
+	uii_readdata();
+	uii_readstatus();
+	uii_accept();
+	
+	uii_target = tempTarget;
+	return uii_data[0] | (uii_data[1]<<8);
+}
+
+unsigned char uii_tcpgetlistensocket()
+{
+	unsigned char tempTarget = uii_target;
+	unsigned char cmd[] = {0x00,NET_CMD_GET_LISTENER_SOCKET};
+	
+	uii_settarget(TARGET_NETWORK);
+	uii_sendcommand(cmd, 0x02);
+
+	uii_readdata();
+	uii_readstatus();
+	uii_accept();
+	
+	uii_target = tempTarget;
+	return uii_data[0] | (uii_data[1]<<8);
+}
 
 void uii_tcpsocketwrite_convert_parameter(unsigned char socketid, char *data, int ascii)
 {
 	unsigned char tempTarget = uii_target;
-	unsigned char cmd[] = {0x00,0x11, 0x00};
+	unsigned char cmd[] = {0x00,NET_CMD_TCP_SOCKET_WRITE, 0x00};
 	int x=0;
 	unsigned char* fullcmd;
 	char c;
@@ -783,4 +845,15 @@ int uii_tcp_nextline(unsigned char socketid, char *result) {
 
 int uii_tcp_nextline_ascii(unsigned char socketid, char *result) {
 	return uii_tcp_nextline_convert_parameter(socketid, result, 1);
+}
+
+void uii_reset_uiidata() {
+	uii_data_len = 0;
+	uii_data_index = 0;
+	memset(uii_data, 0, DATA_QUEUE_SZ*2);
+	memset(uii_status, 0, STATUS_QUEUE_SZ);
+}
+
+void uii_tcp_emptybuffer() {
+	uii_data_index = 0;
 }

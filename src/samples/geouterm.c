@@ -2,7 +2,7 @@
 Ultimate 64/II/+ Telnet GEOS 64/128 Demo
 Scott Hutter
 
-Based on ultimate_dos-1.1.docx and command interface.docx
+Based on ultimate_dos-1.2.docx and command interface.docx
 https://github.com/markusC64/1541ultimate2/tree/master/doc
 
 Disclaimer:  Because of the nature of DOS commands, use this code
@@ -17,7 +17,7 @@ Demo program does not alter any data
 #include <conio.h>
 #include <stdlib.h>
 #include <peekpoke.h>
-#include "..\lib\ultimate_lib.h"
+#include "../lib/ultimate_lib.h"
 #include "geouterm-res.h"
 
 //#define TESTING
@@ -485,7 +485,7 @@ void main(void)
 #ifndef TESTING	
 	socketnr = uii_data[0];
 	
-	if (uii_tcpconnect_success())
+	if (uii_success())
 	{
 #endif
 		hook_into_system();

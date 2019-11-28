@@ -2,7 +2,7 @@
 Ultimate 64/II+ Command Library
 Scott Hutter, Francesco Sblendorio
 
-Based on ultimate_dos-1.1.docx and command interface.docx
+Based on ultimate_dos-1.2.docx and command interface.docx
 https://github.com/markusC64/1541ultimate2/tree/master/doc
 
 Disclaimer:  Because of the nature of DOS commands, use this code
@@ -66,11 +66,27 @@ Patches and pull requests are welcome
 #define CTRL_CMD_DRIVE_B_POWER	0x35
 #define DOS_CMD_ECHO			0xf0
 
+#define NET_CMD_GET_INTERFACE_COUNT	0x02
+#define NET_CMD_GET_IP_ADDRESS		0x05
+#define NET_CMD_TCP_SOCKET_CONNECT	0x07
+#define NET_CMD_TCP_SOCKET_CLOSE	0x09
+#define NET_CMD_TCP_SOCKET_READ		0x10
+#define NET_CMD_TCP_SOCKET_WRITE	0x11
+#define NET_CMD_TCP_LISTENER_START	0x12
+#define NET_CMD_TCP_LISTENER_STOP	0x13
+#define NET_CMD_GET_LISTENER_STATE	0x14
+#define NET_CMD_GET_LISTENER_SOCKET	0x15
+
+#define NET_LISTENER_STATE_NOT_LISTENEING	0x00
+#define NET_LISTENER_STATE_LISTENING		0x01
+#define NET_LISTENER_STATE_CONNECTED		0x02
+#define NET_LISTENER_STATE_BIND_ERROR		0x03
+#define NET_LISTENER_STATE_PORT_IN_USE		0x04
 
 //#define DEBUG
 #define DISPLAY_READ
 
-#define uii_tcpconnect_success() (uii_status[0] == '0' && uii_status[1] == '0')
+#define uii_success() (uii_status[0] == '0' && uii_status[1] == '0')
 
 extern unsigned char uii_status[STATUS_QUEUE_SZ];
 extern unsigned char uii_data[DATA_QUEUE_SZ*2];
@@ -112,6 +128,11 @@ void uii_tcpsocketwrite(unsigned char socketid, char *data);
 void uii_tcpsocketwritechar(unsigned char socketid, char one_char);
 void uii_tcpsocketwrite_ascii(unsigned char socketid, char *data);
 
+int uii_tcplistenstart(unsigned short port);
+int uii_tcplistenstop(void);
+int uii_tcpgetlistenstate(void);
+unsigned char uii_tcpgetlistensocket(void);
+
 void uii_logtext(char *text);
 void uii_logstatusreg(void);
 void uii_sendcommand(unsigned char *bytes, int count);
@@ -125,6 +146,8 @@ int uii_isstatusdataavailable(void);
 char uii_tcp_nextchar(unsigned char socketid);
 int uii_tcp_nextline(unsigned char socketid, char*);
 int uii_tcp_nextline_ascii(unsigned char socketid, char*);
+void uii_tcp_emptybuffer(void);
+void uii_reset_uiidata(void);
 
 void uii_enable_drive_a(void);
 void uii_disable_drive_a(void);
